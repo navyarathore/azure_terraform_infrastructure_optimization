@@ -40,6 +40,57 @@ Infrastructure as Code (IaC) solution for deploying secure, scalable web applica
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph Internet
+        Client[Client Browser]
+    end
+    
+    subgraph Azure["Azure Cloud"]
+        subgraph VNet["Virtual Network (10.x.0.0/16)"]
+            subgraph PublicSubnet["Public Subnet (10.x.1.0/24)"]
+                AppGW[Application Gateway<br/>Standard_v2<br/>SSL Termination]
+                Bastion[Bastion Host<br/>SSH Access]
+            end
+            
+            subgraph AppGWSubnet["App Gateway Subnet (10.x.3.0/24)"]
+                AppGWBackend[App Gateway Backend]
+            end
+            
+            subgraph PrivateSubnet["Private Subnet (10.x.2.0/24)"]
+                VM1[VM 1<br/>Ubuntu + Docker<br/>NGINX Container]
+                VM2[VM 2<br/>Ubuntu + Docker<br/>NGINX Container]
+                VM3[VM N<br/>Ubuntu + Docker<br/>NGINX Container]
+            end
+            
+            NAT[NAT Gateway<br/>Outbound Internet]
+        end
+        
+        ACR[Azure Container Registry<br/>nginx-https images]
+        Storage[Azure Storage<br/>Terraform State]
+    end
+    
+    Client -->|HTTPS/HTTP| AppGW
+    AppGW -->|HTTPS| VM1
+    AppGW -->|HTTPS| VM2
+    AppGW -->|HTTPS| VM3
+    Bastion -.->|SSH| VM1
+    Bastion -.->|SSH| VM2
+    Bastion -.->|SSH| VM3
+    VM1 -->|Pull Images| ACR
+    VM2 -->|Pull Images| ACR
+    VM3 -->|Pull Images| ACR
+    PrivateSubnet -->|Outbound| NAT
+    
+    style AppGW fill:#0078D4,color:#fff
+    style ACR fill:#0078D4,color:#fff
+    style Storage fill:#0078D4,color:#fff
+    style VM1 fill:#7B42BC,color:#fff
+    style VM2 fill:#7B42BC,color:#fff
+    style VM3 fill:#7B42BC,color:#fff
+    style Bastion fill:#009639,color:#fff
+```
+
 ### Infrastructure Components
 
 **Network Layer:**
@@ -120,21 +171,6 @@ azure_terraform_infrastructure_optimization/
 - Active Azure subscription
 - Permissions to create resources
 - Service Principal (for CI/CD)
-
-**Install Tools:**
-```bash
-# Azure CLI
-curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-# Terraform
-wget https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
-unzip terraform_1.5.7_linux_amd64.zip
-sudo mv terraform /usr/local/bin/
-
-# Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-```
 
 ---
 
@@ -242,20 +278,6 @@ Visit in browser (accept self-signed certificate warning).
 - `acr_sku` - ACR tier (Standard)
 - `docker_image_name` - Docker image name
 - `docker_image_tag` - Image tag
-
-### Testing Deployment
-
-```bash
-# Get outputs
-terraform output
-
-# Test HTTP redirect
-APP_IP=$(terraform output -raw app_gateway_public_ip)
-curl -I http://$APP_IP
-
-# Test HTTPS
-curl -k https://$APP_IP
-```
 
 ---
 
