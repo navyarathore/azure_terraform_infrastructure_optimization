@@ -1,11 +1,11 @@
-# Azure Terraform Infrastructure - Multi-Cloud NGINX Deployment
+# Azure Terraform Infrastructure - NGINX Deployment
 
 ![Azure](https://img.shields.io/badge/Azure-0078D4?style=for-the-badge&logo=microsoft-azure&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-7B42BC?style=for-the-badge&logo=terraform&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![NGINX](https://img.shields.io/badge/NGINX-009639?style=for-the-badge&logo=nginx&logoColor=white)
 
-A modular, scalable, and environment-based Terraform infrastructure on Azure for deploying a Dockerized NGINX web application with HTTPS, load balancing, and Jenkins CI/CD automation.
+A modular, scalable Terraform infrastructure on Azure for deploying a Dockerized NGINX web application with HTTPS, load balancing, and Jenkins CI/CD automation.
 
 ---
 
@@ -13,11 +13,6 @@ A modular, scalable, and environment-based Terraform infrastructure on Azure for
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-  - [High-Level Architecture](#high-level-architecture)
-  - [Traffic Flow](#traffic-flow)
-  - [Component Details](#component-details)
-  - [Security Architecture](#security-architecture)
-  - [Terraform Module Architecture](#terraform-module-architecture)
 - [Features](#features)
 - [Project Structure](#project-structure)
 - [Prerequisites](#prerequisites)
@@ -35,7 +30,7 @@ A modular, scalable, and environment-based Terraform infrastructure on Azure for
 
 ## Overview
 
-This project provides a complete Infrastructure as Code (IaC) solution for deploying a secure, scalable web application on Azure using Terraform official registry modules.
+This project provides a complete Infrastructure as Code (IaC) solution for deploying a secure, scalable web application on Azure using Terraform.
 
 ### What's Included
 
@@ -50,308 +45,149 @@ This project provides a complete Infrastructure as Code (IaC) solution for deplo
 
 ## Architecture
 
-### High-Level Architecture
+### Infrastructure Components
 
-```mermaid
-graph TB
-    subgraph Internet
-        Users[Internet Users]
-    end
-    
-    subgraph Azure["Azure Cloud"]
-        subgraph RG_Network["Resource Group: Network"]
-            subgraph VNet["Virtual Network (10.x.0.0/16)"]
-                subgraph PublicSubnet["Public Subnet (10.x.1.0/24)"]
-                    PIP1[Public IP #1<br/>App Gateway]
-                    AppGW[Application Gateway<br/>- HTTPS<br/>- SSL Cert<br/>- WAF prod<br/>- HTTP→HTTPS]
-                    PIP2[Public IP #2<br/>Bastion]
-                    Bastion[Bastion Host<br/>Jump Server<br/>SSH 22]
-                    NSG_Public[NSG - Public<br/>- 443 Allow<br/>- 80 Allow<br/>- 22 Bastion]
-                end
-                
-                subgraph PrivateSubnet["Private Subnet (10.x.2.0/24)"]
-                    subgraph AvailSet["VM Availability Set"]
-                        VM1[VM Instance 1<br/>Docker + NGINX<br/>HTTPS]
-                        VM2[VM Instance 2<br/>Docker + NGINX<br/>HTTPS]
-                        VMN[VM Instance N<br/>Docker + NGINX<br/>HTTPS]
-                    end
-                    NAT[NAT Gateway<br/>Outbound only]
-                    NSG_Private[NSG - Private<br/>- 22 from Bastion ✓<br/>- 443 from App GW ✓<br/>- 80 from App GW ✓<br/>- 22 from Internet ✗]
-                end
-            end
-        end
-        
-        subgraph RG_ACR["Resource Group: Container Registry"]
-            ACR[Azure Container Registry<br/>Repository: nginx-https<br/>Tags: latest, v1.0, ...]
-        end
-        
-        subgraph RG_State["Resource Group: Terraform State"]
-            Storage[Storage Account<br/>tfstateazuresa<br/>Container: tfstate]
-        end
-    end
-    
-    Users -->|HTTPS 443<br/>HTTP 80| PIP1
-    PIP1 --> AppGW
-    AppGW --> VM1
-    AppGW --> VM2
-    AppGW --> VMN
-    VM1 --> NAT
-    VM2 --> NAT
-    VMN --> NAT
-    NAT -->|Outbound| Internet
-    ACR -.->|Docker Pull| VM1
-    ACR -.->|Docker Pull| VM2
-    ACR -.->|Docker Pull| VMN
-    Users -->|SSH 22| PIP2
-    PIP2 --> Bastion
-    Bastion -.->|SSH| VM1
-    Bastion -.->|SSH| VM2
-    Bastion -.->|SSH| VMN
-```
+The infrastructure consists of the following Azure resources deployed across multiple resource groups:
 
-### Traffic Flow
+#### Network Architecture
+- **Virtual Network**: Segmented into public and private subnets (10.x.0.0/16)
+  - **Public Subnet** (10.x.1.0/24): Hosts Application Gateway and Bastion Host
+  - **Private Subnet** (10.x.2.0/24): Hosts application VMs (no public IPs)
+- **NAT Gateway**: Provides controlled outbound internet access for private VMs
+- **Network Security Groups (NSGs)**: Enforce restrictive firewall rules
+  - Public NSG: Allows ports 80, 443, 22 (bastion), and 65200-65535 (App Gateway management)
+  - Private NSG: Allows traffic only from public subnet
 
-#### Request Path (HTTPS)
+#### Compute Resources
+- **VM Availability Set**: Ensures high availability across fault and update domains
+  - Dev: 2 VMs | Test: 3 VMs | Prod: 5 VMs
+  - OS: Ubuntu 22.04 LTS
+  - Docker pre-installed via cloud-init
+  - NGINX containers pulled from Azure Container Registry
 
-```mermaid
-sequenceDiagram
-    participant User as Internet User
-    participant PIP as Public IP
-    participant AppGW as Application Gateway
-    participant VM as VM Backend Pool
-    
-    User->>PIP: HTTPS Request (443)
-    PIP->>AppGW: Forward to App Gateway
-    AppGW->>AppGW: SSL Termination
-    AppGW->>AppGW: Health Check
-    AppGW->>AppGW: Load Balance
-    AppGW->>VM: Forward to VM (HTTPS)
-    VM->>VM: NGINX processes request
-    VM->>AppGW: Response with landing page
-    AppGW->>PIP: Encrypted response
-    PIP->>User: HTTPS Response
-```
-
-#### SSH Access via Bastion Host
-
-```mermaid
-sequenceDiagram
-    participant Admin as Administrator
-    participant BastionIP as Bastion Public IP
-    participant Bastion as Bastion Host
-    participant VM as Private VM
-    
-    Admin->>BastionIP: SSH Request (Port 22)
-    Note over Admin,BastionIP: ssh -i key.pem azureuser@bastion-ip
-    BastionIP->>Bastion: Forward to Bastion
-    Bastion->>Bastion: Authenticate
-    Admin->>Bastion: Connected to Bastion
-    Admin->>Bastion: SSH to Private VM
-    Note over Admin,Bastion: ssh azureuser@vm-private-ip
-    Bastion->>VM: SSH Request
-    VM->>VM: Authenticate
-    VM->>Bastion: SSH Session Established
-    Note over Admin,VM: Direct commands on private VM
-```
-
-#### Outbound Traffic
-
-```mermaid
-graph LR
-    VM[VM Instance<br/>Private Subnet] --> NAT[NAT Gateway]
-    NAT --> Internet[Internet<br/>Docker Hub, apt repos]
-```
-
-### Component Details
-
-#### Application Gateway
-
-- **Type**: Standard_v2 (dev/test) or WAF_v2 (production)
-- **Listeners**:
-  - Port 80 (HTTP) - Redirects to 443
-  - Port 443 (HTTPS) - SSL Certificate
-- **Backend Pool**: Connected to VM Availability Set
-- **Health Probes**:
-  - Path: `/health`
-  - Interval: 30 seconds
-  - Timeout: 30 seconds
-- **Features**:
-  - SSL/TLS termination
+#### Load Balancing & Security
+- **Application Gateway**: Layer 7 load balancer with SSL termination
+  - Standard_v2 SKU (dev/test) or WAF_v2 (production)
   - HTTP to HTTPS redirection
+  - Health probes: `/health` endpoint (30s intervals)
   - Cookie-based session affinity
-  - Optional WAF for production
 
-#### VM Availability Set
+#### Container Registry
+- **Azure Container Registry (ACR)**: Private Docker registry
+  - Standard tier for all environments
+  - Admin access enabled for VM authentication
+  - Repository: nginx-https
 
-- **Operating System**: Ubuntu 22.04 LTS
-- **Instance Count**:
-  - Development: 2 VMs
-  - Test: 3 VMs
-  - Production: 5 VMs
-- **Software**: Docker CE pre-installed
-- **Container**: NGINX from Azure Container Registry
-- **Deployment**: Cloud-init pulls Docker image on boot
-- **High Availability**: Deployed across fault and update domains
+#### Access & Management
+- **Bastion Host**: Secure jump server for SSH access to private VMs
+  - Standard_B1s VM in public subnet
+  - SSH key authentication only
+  - Configurable allowed CIDR ranges
 
-#### Bastion Host
-
-- **Purpose**: Secure SSH gateway to private VMs
-- **Location**: Public subnet (alongside Application Gateway)
-- **VM Size**: Standard_B1s (cost-effective)
-- **Operating System**: Ubuntu 22.04 LTS
-- **Public IP**: Yes (for SSH access)
-- **Authentication**: SSH key only (no password authentication)
-- **Features**:
-  - Jump server for private VM access
-  - Controlled access with allowed CIDR configuration
-  - Audit logging for security compliance
-
-#### Network Security
-
-**Public Network Security Group**:
-- Allows port 80, 443 (web traffic)
-- Allows port 65200-65535 (Application Gateway management)
-- Allows port 22 (SSH to bastion from allowed CIDR)
-- Denies all other inbound traffic
-
-**Private Network Security Group**:
-- Allows port 80, 443 from public subnet (Application Gateway)
-- Allows port 22 from public subnet (Bastion host only)
-- Denies port 22 from Internet
-- Denies all other inbound traffic
-
-**VM Network Isolation**:
-- No public IPs on application VMs
-- All VMs in private subnet
-- Internet access only through NAT Gateway (outbound)
-
-#### Azure Container Registry
-
-- **Development/Test**: Standard tier
-- **Production**: Standard tier (Premium optional for geo-replication)
-- **Access**: Admin enabled for VM pull authentication
-- **Repository**: nginx-https
-- **Tags**: Environment-based (latest, dev, test, prod)
+#### State Management
+- **Terraform Backend**: Azure Storage Account for remote state
+  - Storage Account: tfstateazuresa
+  - Container: tfstate
+  - Enables team collaboration and state locking
 
 ### Security Architecture
 
-```mermaid
-graph TB
-    subgraph Layer1["Layer 1: Network Isolation"]
-        L1A[Private Subnet for VMs<br/>No Public IPs]
-        L1B[Public Subnet for<br/>App Gateway Only]
-        L1C[NAT Gateway for<br/>Controlled Outbound]
-    end
-    
-    subgraph Layer2["Layer 2: Network Security Groups"]
-        L2A[Public NSG<br/>Limits ingress: 80, 443, 22]
-        L2B[Private NSG<br/>Only from public subnet]
-        L2C[Default Deny All]
-    end
-    
-    subgraph Layer3["Layer 3: Application Gateway"]
-        L3A[SSL/TLS Termination]
-        L3B[HTTP to HTTPS Redirect]
-        L3C[WAF - Production]
-        L3D[DDoS Protection]
-    end
-    
-    subgraph Layer4["Layer 4: VM Security"]
-        L4A[SSH Key Authentication]
-        L4B[No Password Auth]
-        L4C[Ubuntu Security Updates]
-        L4D[Docker Best Practices]
-    end
-    
-    subgraph Layer5["Layer 5: Encryption"]
-        L5A[HTTPS End-to-End]
-        L5B[SSL Certificates]
-        L5C[Storage Encryption at Rest]
-    end
-    
-    Layer1 --> Layer2
-    Layer2 --> Layer3
-    Layer3 --> Layer4
-    Layer4 --> Layer5
-```
+The infrastructure implements defense-in-depth security with multiple layers:
 
-### Terraform Module Architecture
+#### Layer 1: Network Isolation
+- **Private Subnet Deployment**: Application VMs have no public IPs
+- **Public Subnet Segregation**: Only Application Gateway and Bastion in public subnet
+- **NAT Gateway**: Controlled outbound internet access for private VMs
 
-```mermaid
-graph TB
-    subgraph Root["Root Configuration (env/dev|test|prod)"]
-        Locals[locals.tf<br/>Environment Variables]
-        Main[main.tf<br/>Module Calls]
-        Backend[backend.tf<br/>Remote State]
-        TFVars[terraform.tfvars<br/>Values]
-    end
-    
-    Root --> Networking[Networking Module<br/>- VNet<br/>- Subnets<br/>- NAT Gateway<br/>- NSGs]
-    Root --> Bastion[Bastion Module<br/>- Bastion VM<br/>- Public IP<br/>- SSH Config]
-    Root --> AppGW[App Gateway Module<br/>- Application Gateway<br/>- SSL Certificate<br/>- Listeners<br/>- Rules]
-    Root --> Compute[Compute Module<br/>- Availability Set<br/>- VMs<br/>- Cloud-init<br/>- NICs]
-    Root --> ACR[ACR Module<br/>- Container Registry<br/>- Repository]
-    
-    style Root fill:#e1f5ff
-    style Networking fill:#fff4e1
-    style Bastion fill:#ffe1e1
-    style AppGW fill:#e1ffe1
-    style Compute fill:#f4e1ff
-    style ACR fill:#ffe1f4
-```
+#### Layer 2: Network Security Groups
+- **Public NSG**: Restricts ingress to ports 80, 443, 22 (bastion), and App Gateway management ports
+- **Private NSG**: Allows traffic only from public subnet (Application Gateway and Bastion)
+- **Default Deny**: All other inbound traffic is denied
 
-### Deployment Flow
+#### Layer 3: Application Security
+- **SSL/TLS Termination**: End-to-end HTTPS encryption
+- **HTTP to HTTPS Redirect**: Automatic redirection enforces secure connections
+- **Web Application Firewall**: Optional WAF_v2 for production environments
+- **DDoS Protection**: Built-in Azure DDoS protection
 
-```mermaid
-graph TD
-    A[1. Bootstrap Backend] -->|scripts/bootstrap-backend.sh| B[Create Azure Storage for State]
-    B --> C[2. Generate SSH Key]
-    C -->|scripts/generate-ssh-key.sh| D[Create .ssh/azure-vm-key]
-    D --> E[3. Configure Environment]
-    E -->|terraform.tfvars| F[Set SSH key, passwords, settings]
-    F --> G[4. Terraform Init]
-    G --> H[Download providers, init backend]
-    H --> I[5. Terraform Plan]
-    I --> J[Show resources to create]
-    J --> K[6. Terraform Apply]
-    K --> L[Create Networking 2-3 min]
-    L --> M[Create ACR 1-2 min]
-    M --> N[Create App Gateway 15-20 min]
-    N --> O[Create VMs 5-7 min]
-    O --> P[7. Build Docker Image]
-    P -->|scripts/build-and-push-docker.sh| Q[Build and push NGINX to ACR]
-    Q --> R[8. VM Cloud-init]
-    R --> S[Install Docker, login ACR, pull image]
-    S --> T[9. Access Application]
-    T --> U[https://app-gateway-public-ip]
-```
+#### Layer 4: VM Security
+- **SSH Key Authentication**: Bastion host uses key-based authentication only
+- **Password Authentication Disabled**: No password-based SSH access
+- **OS Security**: Ubuntu 22.04 LTS with automatic security updates
+- **Container Security**: Docker best practices and minimal base images
+
+#### Layer 5: Data Protection
+- **HTTPS End-to-End**: Encrypted traffic from client to backend
+- **Self-Signed SSL Certificates**: Included (replaceable with custom certificates)
+- **Storage Encryption**: Azure storage encryption at rest for Terraform state
+
+### Terraform Module Structure
+
+The infrastructure is organized into reusable Terraform modules:
+
+- **Root Configuration** (`env/dev|test|prod/`)
+  - `backend.tf`: Remote state configuration
+  - `locals.tf`: Environment-specific variables
+  - `main.tf`: Module instantiations
+  - `variables.tf`: Variable definitions
+  - `terraform.tfvars`: Configuration values
+  - `outputs.tf`: Output values
+
+- **Networking Module** (`modules/networking/`)
+  - VNet, subnets, NAT Gateway, NSGs
+
+- **Bastion Module** (`modules/bastion/`)
+  - Bastion VM, public IP, SSH configuration
+
+- **App Gateway Module** (`modules/app-gateway/`)
+  - Application Gateway, SSL certificate, listeners, routing rules
+
+- **Compute Module** (`modules/compute/`)
+  - Availability Set, VMs, cloud-init, NICs
+
+- **ACR Module** (`modules/acr/`)
+  - Container Registry configuration
+
+### Deployment Timeline
+
+Typical deployment takes 25-35 minutes:
+
+1. **Backend Bootstrap** (1-2 min): Create Azure Storage for Terraform state
+2. **Terraform Init** (1-2 min): Download providers and initialize backend
+3. **Networking** (2-3 min): Create VNet, subnets, NAT Gateway, NSGs
+4. **ACR** (1-2 min): Create Azure Container Registry
+5. **Application Gateway** (15-20 min): Deploy Application Gateway (longest step)
+6. **Compute** (5-7 min): Deploy VMs in Availability Set
+7. **Docker Build & Push** (2-3 min): Build NGINX image and push to ACR
+8. **Cloud-init** (2-3 min): VMs pull and start Docker containers
 
 ---
 
 ## Features
 
 ### Infrastructure
-- Modular Terraform architecture using official Azure provider
-- Multi-environment deployment (dev, test, prod)
-- Private network deployment for security
-- Availability Sets for high availability
-- Application Gateway for Layer 7 load balancing
-- Fixed VM count per environment (no auto-scaling)
+- **Modular Architecture**: Reusable Terraform modules using official Azure provider
+- **Multi-Environment Support**: Separate dev, test, and production configurations
+- **High Availability**: VM Availability Sets with fault and update domain distribution
+- **Layer 7 Load Balancing**: Application Gateway with health monitoring
+- **Private Network Deployment**: VMs isolated in private subnet without public IPs
+- **Scalable Design**: Fixed VM count per environment (2 dev, 3 test, 5 prod)
 
 ### Security
-- End-to-end HTTPS encryption
-- VMs deployed in private subnet (not internet-accessible)
-- Bastion host for secure SSH access
-- Network Security Groups with restrictive rules
-- SSH key-based authentication (bastion)
-- Self-signed SSL certificates (replaceable with custom certificates)
-- HTTP to HTTPS automatic redirection
+- **End-to-End Encryption**: HTTPS from client to backend with SSL/TLS termination
+- **Network Isolation**: Private subnet deployment with NAT Gateway for outbound traffic
+- **Secure Access**: Bastion host with SSH key authentication for VM management
+- **Restrictive Firewall**: Network Security Groups with deny-by-default policies
+- **Automatic HTTPS**: HTTP to HTTPS redirection enforced at Application Gateway
+- **Flexible Certificates**: Self-signed SSL included, supports custom certificates
 
-### Automation
-- Jenkins pipeline for CI/CD
-- Automated backend state management
-- Docker image build and push scripts
-- Cloud-init for VM provisioning
+### Automation & DevOps
+- **CI/CD Pipeline**: Jenkins integration for automated deployments
+- **Infrastructure as Code**: Version-controlled Terraform configurations
+- **Remote State Management**: Azure Storage backend with state locking
+- **Automated Provisioning**: Cloud-init scripts for Docker and NGINX deployment
+- **Build Scripts**: Automated Docker image building and ACR push
+- **Multi-Environment**: Environment-specific configurations and variable files
 
 ---
 
