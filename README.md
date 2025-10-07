@@ -42,52 +42,29 @@ Infrastructure as Code (IaC) solution for deploying secure, scalable web applica
 
 ```mermaid
 graph TB
-    subgraph Internet
-        Client[Client Browser]
-    end
+    Client[Client Browser] -->|HTTPS/HTTP| AppGW
     
     subgraph Azure["Azure Cloud"]
-        subgraph VNet["Virtual Network (10.x.0.0/16)"]
-            subgraph PublicSubnet["Public Subnet (10.x.1.0/24)"]
-                AppGW[Application Gateway<br/>Standard_v2<br/>SSL Termination]
-                Bastion[Bastion Host<br/>SSH Access]
-            end
-            
-            subgraph AppGWSubnet["App Gateway Subnet (10.x.3.0/24)"]
-                AppGWBackend[App Gateway Backend]
-            end
-            
-            subgraph PrivateSubnet["Private Subnet (10.x.2.0/24)"]
-                VM1[VM 1<br/>Ubuntu + Docker<br/>NGINX Container]
-                VM2[VM 2<br/>Ubuntu + Docker<br/>NGINX Container]
-                VM3[VM N<br/>Ubuntu + Docker<br/>NGINX Container]
-            end
-            
-            NAT[NAT Gateway<br/>Outbound Internet]
+        AppGW[Application Gateway<br/>SSL Termination]
+        
+        subgraph VNet["Virtual Network"]
+            Bastion[Bastion Host] -.->|SSH| VM
+            VM[VM<br/>Ubuntu + Docker<br/>NGINX Container]
+            NAT[NAT Gateway]
         end
         
-        ACR[Azure Container Registry<br/>nginx-https images]
-        Storage[Azure Storage<br/>Terraform State]
+        ACR[Container Registry]
+        Storage[Terraform State]
     end
     
-    Client -->|HTTPS/HTTP| AppGW
-    AppGW -->|HTTPS| VM1
-    AppGW -->|HTTPS| VM2
-    AppGW -->|HTTPS| VM3
-    Bastion -.->|SSH| VM1
-    Bastion -.->|SSH| VM2
-    Bastion -.->|SSH| VM3
-    VM1 -->|Pull Images| ACR
-    VM2 -->|Pull Images| ACR
-    VM3 -->|Pull Images| ACR
-    PrivateSubnet -->|Outbound| NAT
+    AppGW -->|HTTPS| VM
+    VM -->|Pull Images| ACR
+    VM -->|Outbound| NAT
     
     style AppGW fill:#0078D4,color:#fff
     style ACR fill:#0078D4,color:#fff
     style Storage fill:#0078D4,color:#fff
-    style VM1 fill:#7B42BC,color:#fff
-    style VM2 fill:#7B42BC,color:#fff
-    style VM3 fill:#7B42BC,color:#fff
+    style VM fill:#7B42BC,color:#fff
     style Bastion fill:#009639,color:#fff
 ```
 
@@ -396,4 +373,6 @@ Add to Jenkins credentials:
 
 ---
 
-*Last Updated: October 8, 2025*  
+*### Made by Navya Rathore*
+
+*### Last Updated: October 8, 2025*  
