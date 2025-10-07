@@ -38,36 +38,6 @@ Infrastructure as Code (IaC) solution for deploying secure, scalable web applica
 
 ---
 
-## Architecture
-
-```mermaid
-graph TB
-    Client[Client Browser] -->|HTTPS/HTTP| AppGW
-    
-    subgraph Azure["Azure Cloud"]
-        AppGW[Application Gateway<br/>SSL Termination]
-        
-        subgraph VNet["Virtual Network"]
-            Bastion[Bastion Host] -.->|SSH| VM
-            VM[VM<br/>Ubuntu + Docker<br/>NGINX Container]
-            NAT[NAT Gateway]
-        end
-        
-        ACR[Container Registry]
-        Storage[Terraform State]
-    end
-    
-    AppGW -->|HTTPS| VM
-    VM -->|Pull Images| ACR
-    VM -->|Outbound| NAT
-    
-    style AppGW fill:#0078D4,color:#fff
-    style ACR fill:#0078D4,color:#fff
-    style Storage fill:#0078D4,color:#fff
-    style VM fill:#7B42BC,color:#fff
-    style Bastion fill:#009639,color:#fff
-```
-
 ### Infrastructure Components
 
 **Network Layer:**
