@@ -1,0 +1,50 @@
+package_update: true
+package_upgrade: true
+
+packages:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - software-properties-common
+  - gnupg
+  - lsb-release
+
+write_files:
+  - path: /etc/systemd/system/nginx-container.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=NGINX Docker Container
+      After=docker.service
+      Requires=docker.service
+      
+      [Service]
+      Type=simple
+      Restart=always
+      RestartSec=10s
+      ExecStartPre=-/usr/bin/docker stop nginx-app
+      ExecStartPre=-/usr/bin/docker rm nginx-app
+      ExecStartPre=/usr/bin/docker login ${acr_name}.azurecr.io -u ${acr_username} -p ${acr_password}
+      ExecStartPre=/usr/bin/docker pull ${acr_name}.azurecr.io/${image_name}:${image_tag}
+      ExecStart=/usr/bin/docker run --name nginx-app -p 80:80 -p 443:443 ${acr_name}.azurecr.io/${image_name}:${image_tag}
+      ExecStop=/usr/bin/docker stop nginx-app
+      
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  - systemctl start docker
+  - systemctl enable docker
+  - usermod -aG docker ubuntu
+  
+  - systemctl daemon-reload
+  - systemctl enable nginx-container.service
+  - systemctl start nginx-container.service
+  
+  - sleep 30
+
+final_message: "NGINX Docker container is running after $UPTIME seconds"

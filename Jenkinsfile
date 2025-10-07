@@ -1,0 +1,128 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'test', 'prod'], description: 'Target environment')
+        choice(name: 'ACTION', choices: ['plan', 'apply', 'destroy'], description: 'Terraform action')
+        booleanParam(name: 'BUILD_DOCKER', defaultValue: false, description: 'Build and push Docker image')
+        booleanParam(name: 'AUTO_APPROVE', defaultValue: false, description: 'Auto-approve (use with caution)')
+    }
+    
+    environment {
+        AZURE_SUBSCRIPTION_ID = credentials('azure-subscription-id')
+        AZURE_CLIENT_ID = credentials('azure-client-id')
+        AZURE_CLIENT_SECRET = credentials('azure-client-secret')
+        AZURE_TENANT_ID = credentials('azure-tenant-id')
+        WORKING_DIR = "env/${params.ENVIRONMENT}"
+    }
+    
+    stages {
+        stage('Setup') {
+            steps {
+                checkout scm
+                sh """
+                    az login --service-principal \
+                        -u \${AZURE_CLIENT_ID} \
+                        -p \${AZURE_CLIENT_SECRET} \
+                        --tenant \${AZURE_TENANT_ID}
+                    az account set --subscription \${AZURE_SUBSCRIPTION_ID}
+                """
+            }
+        }
+        
+        stage('Terraform Init') {
+            steps {
+                dir("${WORKING_DIR}") {
+                    sh "terraform init -input=false"
+                }
+            }
+        }
+        
+        stage('Terraform Plan') {
+            when {
+                expression { params.ACTION != 'destroy' }
+            }
+            steps {
+                dir("${WORKING_DIR}") {
+                    sh "terraform plan -out=tfplan"
+                }
+            }
+        }
+        
+        stage('Terraform Apply') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                dir("${WORKING_DIR}") {
+                    script {
+                        if (!params.AUTO_APPROVE) {
+                            input message: 'Approve Apply?', ok: 'Apply'
+                        }
+                        sh "terraform apply ${params.AUTO_APPROVE ? '-auto-approve' : 'tfplan'}"
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform Destroy') {
+            when {
+                expression { params.ACTION == 'destroy' }
+            }
+            steps {
+                dir("${WORKING_DIR}") {
+                    script {
+                        if (!params.AUTO_APPROVE) {
+                            input message: "Destroy ${params.ENVIRONMENT}?", ok: 'Destroy'
+                        }
+                        sh "terraform destroy -auto-approve"
+                    }
+                }
+            }
+        }
+        
+        stage('Docker Build & Push') {
+            when {
+                expression { params.BUILD_DOCKER && params.ACTION == 'apply' }
+            }
+            steps {
+                dir("${WORKING_DIR}") {
+                    script {
+                        def acrName = sh(script: "terraform output -raw acr_name", returnStdout: true).trim()
+                        sh """
+                            az acr login --name ${acrName}
+                            cd ../../docker/nginx
+                            docker build --platform linux/amd64 -t ${acrName}.azurecr.io/nginx-https:${BUILD_NUMBER} -t ${acrName}.azurecr.io/nginx-https:latest .
+                            docker push ${acrName}.azurecr.io/nginx-https:${BUILD_NUMBER}
+                            docker push ${acrName}.azurecr.io/nginx-https:latest
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Restart VMs') {
+            when {
+                expression { params.BUILD_DOCKER && params.ACTION == 'apply' }
+            }
+            steps {
+                dir("${WORKING_DIR}") {
+                    script {
+                        def vmNames = sh(script: "terraform output -json vm_names | jq -r '.[]'", returnStdout: true).trim().split('\n')
+                        def resourceGroup = sh(script: "terraform output -json resource_group_names | jq -r '.compute'", returnStdout: true).trim()
+                        
+                        for (vmName in vmNames) {
+                            sh "az vm restart --name ${vmName} --resource-group ${resourceGroup} --no-wait"
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always { cleanWs() }
+        success { echo "✓ ${params.ACTION} completed for ${params.ENVIRONMENT}" }
+        failure { echo "✗ ${params.ACTION} failed for ${params.ENVIRONMENT}" }
+    }
+}

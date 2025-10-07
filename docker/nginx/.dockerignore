@@ -1,0 +1,7 @@
+*.tar
+*.tar.gz
+
+*.key
+*.crt
+*.pem
+*.csr
