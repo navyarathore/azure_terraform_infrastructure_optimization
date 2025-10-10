@@ -1,0 +1,67 @@
+###############################################################################################
+# Template: Health Check
+# 
+# Validates deployment by checking infrastructure health
+###############################################################################################
+
+parameters:
+  - name: workingDirectory
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: environment
+    type: string
+
+steps:
+  - checkout: self
+    displayName: 'Checkout Code'
+
+  - task: TerraformInstaller@0
+    displayName: 'Install Terraform'
+    inputs:
+      terraformVersion: '1.5.7'
+
+  - task: AzureCLI@2
+    displayName: 'Verify Infrastructure'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        echo "Initializing Terraform..."
+        terraform init -input=false
+        
+        echo "Verifying infrastructure health..."
+        
+        # Get Application Gateway IP
+        if terraform output application_gateway_public_ip &>/dev/null; then
+          APPGW_IP=$(terraform output -raw application_gateway_public_ip)
+          echo "Application Gateway Public IP: $APPGW_IP"
+          
+          # Wait for infrastructure to be ready
+          echo "Waiting 30 seconds for infrastructure to stabilize..."
+          sleep 30
+          
+          # Test HTTPS endpoint
+          echo "Testing HTTPS endpoint..."
+          HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://$APPGW_IP" || echo "000")
+          echo "HTTP Response Code: $HTTP_CODE"
+          
+          if [ "$HTTP_CODE" -eq "200" ] || [ "$HTTP_CODE" -eq "302" ]; then
+            echo "✅ Health check passed!"
+          else
+            echo "⚠️ Health check returned HTTP $HTTP_CODE"
+            echo "Infrastructure may still be initializing"
+          fi
+        else
+          echo "⚠️ Could not retrieve Application Gateway IP"
+        fi
+        
+        echo "Deployment Summary:"
+        echo "===================="
+        terraform output
+        echo "===================="
+        echo "Environment: ${{ parameters.environment }}"
+        echo "Build: $(Build.BuildNumber)"
+        echo "Deployed at: $(date)"

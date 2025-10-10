@@ -1,0 +1,45 @@
+###############################################################################################
+# Template: Terraform Plan
+# 
+# Validates configuration and creates execution plan
+###############################################################################################
+
+parameters:
+  - name: workingDirectory
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: environment
+    type: string
+
+steps:
+  - task: AzureCLI@2
+    displayName: 'Terraform Validate'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        echo "Validating Terraform configuration..."
+        terraform validate
+        echo "Validation successful"
+
+  - task: AzureCLI@2
+    displayName: 'Terraform Plan'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        echo "Running Terraform plan for ${{ parameters.environment }}..."
+        terraform plan -out=tfplan -input=false
+        echo "Plan created successfully"
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish Terraform Plan'
+    inputs:
+      targetPath: '${{ parameters.workingDirectory }}/tfplan'
+      artifact: 'tfplan-${{ parameters.environment }}'
+      publishLocation: 'pipeline'

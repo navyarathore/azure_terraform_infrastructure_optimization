@@ -1,0 +1,212 @@
+###############################################################################################
+# Simplified Azure DevOps Pipeline for Terraform Infrastructure
+# 
+# Easy to use pipeline with minimal configuration required
+# Based on best practices and simplified workflows
+###############################################################################################
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    exclude:
+      - README.md
+      - '*.md'
+      - assets/*
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+parameters:
+  - name: environment
+    displayName: 'Environment'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - test
+      - prod
+
+  - name: action
+    displayName: 'Action'
+    type: string
+    default: 'plan'
+    values:
+      - plan
+      - apply
+      - destroy
+
+  - name: buildDocker
+    displayName: 'Build and Push Docker Image?'
+    type: boolean
+    default: false
+
+variables:
+  - name: terraformVersion
+    value: '1.5.7'
+  - name: workingDirectory
+    value: '$(System.DefaultWorkingDirectory)/environments/${{ parameters.environment }}'
+  - name: azureServiceConnection
+    value: 'Azure-Service-Connection'  # Update with your service connection name
+  
+  # Environment-specific variable groups
+  - ${{ if eq(parameters.environment, 'dev') }}:
+    - group: dev-vars
+  - ${{ if eq(parameters.environment, 'test') }}:
+    - group: test-vars
+  - ${{ if eq(parameters.environment, 'prod') }}:
+    - group: prod-vars
+
+stages:
+  ###############################################################################################
+  # STAGE 1: Plan Infrastructure Changes
+  ###############################################################################################
+  - stage: Plan
+    displayName: 'Plan (${{ parameters.environment }})'
+    jobs:
+      - job: TerraformPlan
+        displayName: 'Terraform Plan'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: templates/terraform-setup.yml
+            parameters:
+              terraformVersion: $(terraformVersion)
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+
+          - template: templates/terraform-plan.yml
+            parameters:
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+              environment: ${{ parameters.environment }}
+
+  ###############################################################################################
+  # STAGE 2: Apply Infrastructure (Conditional)
+  ###############################################################################################
+  - stage: Apply
+    displayName: 'Apply (${{ parameters.environment }})'
+    dependsOn: Plan
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'apply'))
+    jobs:
+      # Production requires manual approval
+      - ${{ if eq(parameters.environment, 'prod') }}:
+        - job: ApprovalGate
+          displayName: 'Approve Production Deployment'
+          pool: server
+          steps:
+            - task: ManualValidation@0
+              timeoutInMinutes: 60
+              inputs:
+                notifyUsers: ''
+                instructions: 'Please review the Terraform plan and approve deployment to production'
+
+      - job: TerraformApply
+        displayName: 'Terraform Apply'
+        ${{ if eq(parameters.environment, 'prod') }}:
+          dependsOn: ApprovalGate
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: templates/terraform-setup.yml
+            parameters:
+              terraformVersion: $(terraformVersion)
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+
+          - template: templates/terraform-apply.yml
+            parameters:
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+
+  ###############################################################################################
+  # STAGE 3: Build and Push Docker (Conditional)
+  ###############################################################################################
+  - stage: Docker
+    displayName: 'Docker (${{ parameters.environment }})'
+    dependsOn: Apply
+    condition: and(succeeded(), eq('${{ parameters.buildDocker }}', true))
+    jobs:
+      - job: BuildPushDocker
+        displayName: 'Build and Push Docker Image'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: templates/docker-build.yml
+            parameters:
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+              environment: ${{ parameters.environment }}
+
+  ###############################################################################################
+  # STAGE 4: Destroy Infrastructure (Conditional)
+  ###############################################################################################
+  - stage: Destroy
+    displayName: 'Destroy (${{ parameters.environment }})'
+    dependsOn: Plan
+    condition: and(succeeded(), eq('${{ parameters.action }}', 'destroy'))
+    jobs:
+      - job: ApprovalGate
+        displayName: 'Approve Infrastructure Destruction'
+        pool: server
+        steps:
+          - task: ManualValidation@0
+            timeoutInMinutes: 60
+            inputs:
+              notifyUsers: ''
+              instructions: 'WARNING: This will destroy all resources in ${{ parameters.environment }}. Confirm to proceed.'
+
+      - job: TerraformDestroy
+        displayName: 'Terraform Destroy'
+        dependsOn: ApprovalGate
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: templates/terraform-setup.yml
+            parameters:
+              terraformVersion: $(terraformVersion)
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+
+          - task: AzureCLI@2
+            displayName: 'Terraform Destroy'
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              workingDirectory: $(workingDirectory)
+              inlineScript: |
+                echo "Destroying infrastructure in ${{ parameters.environment }}..."
+                terraform destroy -auto-approve -input=false
+                echo "Infrastructure destroyed successfully"
+
+  ###############################################################################################
+  # STAGE 5: Validate Deployment (Conditional)
+  ###############################################################################################
+  - stage: Validate
+    displayName: 'Validate (${{ parameters.environment }})'
+    dependsOn:
+      - Apply
+      - Docker
+    condition: |
+      and(
+        in(dependencies.Apply.result, 'Succeeded', 'Skipped'),
+        in(dependencies.Docker.result, 'Succeeded', 'Skipped'),
+        eq('${{ parameters.action }}', 'apply')
+      )
+    jobs:
+      - job: HealthCheck
+        displayName: 'Health Check'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - template: templates/health-check.yml
+            parameters:
+              workingDirectory: $(workingDirectory)
+              azureServiceConnection: $(azureServiceConnection)
+              environment: ${{ parameters.environment }}

@@ -1,0 +1,34 @@
+###############################################################################################
+# Template: Terraform Setup
+# 
+# Installs Terraform and initializes the working directory
+###############################################################################################
+
+parameters:
+  - name: terraformVersion
+    type: string
+  - name: workingDirectory
+    type: string
+  - name: azureServiceConnection
+    type: string
+
+steps:
+  - checkout: self
+    displayName: 'Checkout Code'
+
+  - task: TerraformInstaller@0
+    displayName: 'Install Terraform'
+    inputs:
+      terraformVersion: ${{ parameters.terraformVersion }}
+
+  - task: AzureCLI@2
+    displayName: 'Terraform Init'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        echo "Initializing Terraform..."
+        terraform init -input=false
+        echo "Terraform initialized successfully"

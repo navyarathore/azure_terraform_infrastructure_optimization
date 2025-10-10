@@ -1,0 +1,73 @@
+###############################################################################################
+# Template: Docker Build and Push
+# 
+# Builds Docker image and pushes to Azure Container Registry
+###############################################################################################
+
+parameters:
+  - name: workingDirectory
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: environment
+    type: string
+
+steps:
+  - checkout: self
+    displayName: 'Checkout Code'
+
+  - task: TerraformInstaller@0
+    displayName: 'Install Terraform'
+    inputs:
+      terraformVersion: '1.5.7'
+
+  - task: AzureCLI@2
+    displayName: 'Get ACR Details'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        echo "Initializing Terraform to get state..."
+        terraform init -input=false
+        
+        echo "Extracting ACR details..."
+        ACR_NAME=$(terraform output -raw acr_name)
+        ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server)
+        
+        echo "##vso[task.setvariable variable=acrName]$ACR_NAME"
+        echo "##vso[task.setvariable variable=acrLoginServer]$ACR_LOGIN_SERVER"
+        
+        echo "ACR Name: $ACR_NAME"
+        echo "ACR Login Server: $ACR_LOGIN_SERVER"
+
+  - task: AzureCLI@2
+    displayName: 'Build and Push Docker Image'
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: 'bash'
+      scriptLocation: 'inlineScript'
+      workingDirectory: '$(System.DefaultWorkingDirectory)/docker/nginx'
+      inlineScript: |
+        echo "Logging into ACR..."
+        az acr login --name $(acrName)
+        
+        echo "Building Docker image..."
+        IMAGE_TAG="$(Build.BuildNumber)"
+        IMAGE_NAME="nginx-https"
+        FULL_IMAGE_NAME="$(acrLoginServer)/${IMAGE_NAME}"
+        
+        docker build \
+          --platform linux/amd64 \
+          -t "${FULL_IMAGE_NAME}:${IMAGE_TAG}" \
+          -t "${FULL_IMAGE_NAME}:latest" \
+          .
+        
+        echo "Pushing Docker image to ACR..."
+        docker push "${FULL_IMAGE_NAME}:${IMAGE_TAG}"
+        docker push "${FULL_IMAGE_NAME}:latest"
+        
+        echo "Docker image pushed successfully"
+        echo "Image: ${FULL_IMAGE_NAME}:${IMAGE_TAG}"
+        echo "Image: ${FULL_IMAGE_NAME}:latest"
