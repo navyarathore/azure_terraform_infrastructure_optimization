@@ -13,7 +13,7 @@ fi
 echo "Building and pushing Docker image for ${ENVIRONMENT}..."
 
 # to get ACR details from terraform
-cd "$(dirname "$0")/../env/${ENVIRONMENT}"
+cd "$(dirname "$0")/../environments/${ENVIRONMENT}"
 ACR_NAME=$(terraform output -raw acr_name)
 ACR_LOGIN_SERVER=$(terraform output -raw acr_login_server)
 
